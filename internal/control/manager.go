@@ -506,7 +506,8 @@ func (m *Manager) clearFailureLocked(key string) {
 	delete(m.failures, key)
 }
 
-// Alternatives returns the already ordered, positive-weight published routes.
+// Alternatives returns the already ordered, positive-weight published routes
+// (plus the selected route when a zero-weight path was explicitly chosen).
 // It does not activate pools or issue additional tokens.
 func (m *Manager) Alternatives(ctx context.Context) ([]relay.Config, error) {
 	if _, err := m.Current(ctx); err != nil {
@@ -522,7 +523,7 @@ func (m *Manager) Alternatives(ctx context.Context) ([]relay.Config, error) {
 	}
 	routes := make([]relay.Config, 0, len(m.configuration.Paths))
 	for _, path := range m.configuration.Paths {
-		if path.Weight > 0 {
+		if path.Weight > 0 || slices.Equal(path.Indexes, m.configuration.SelectedPath.Indexes) {
 			routes = append(routes, m.relayConfigLocked(m.configuration.Epoch, path.Ingress, path.Egress))
 		}
 	}
@@ -546,7 +547,7 @@ func (m *Manager) ActivateRoute(ctx context.Context, route relay.Config) error {
 		return err
 	}
 	for _, path := range m.configuration.Paths {
-		if path.Weight == 0 {
+		if path.Weight == 0 && !slices.Equal(path.Indexes, m.configuration.SelectedPath.Indexes) {
 			continue
 		}
 		candidate := m.relayConfigLocked(m.configuration.Epoch, path.Ingress, path.Egress)

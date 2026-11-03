@@ -101,7 +101,8 @@ func TestConfigurationPreferences(t *testing.T) {
 		{"partial fallback", Preferences{Ingress: []string{"Apple"}, Egress: []string{"unavailable"}}, []int{0, 4, 1, 2, 3}, true},
 		{"ordered preferences", Preferences{Ingress: []string{"unknown, Akamai", "Apple"}}, []int{2, 0, 4, 1, 3}, false},
 		{"endpoint preference", Preferences{Ingress: []string{"apple.invalid:443"}, Egress: []string{"fastly-b.invalid"}}, []int{4, 0, 1, 2, 3}, false},
-		{"zero weight cannot win", Preferences{Ingress: []string{"Akamai"}, Egress: []string{"Fastly_A"}}, []int{2, 0, 4, 1, 3}, true},
+		{"explicit zero weight match", Preferences{Ingress: []string{"Akamai"}, Egress: []string{"Fastly_A"}}, []int{3, 2, 0, 4, 1}, false},
+		{"prefix match prefers highest weight", Preferences{Egress: []string{"Fastly"}}, []int{0, 4, 2, 1, 3}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configuration := Configuration{Paths: slices.Clone(paths)}
@@ -116,7 +117,7 @@ func TestConfigurationPreferences(t *testing.T) {
 					t.Fatalf("path %d = %v, want %v", i, configuration.Paths[i].Indexes, paths[index].Indexes)
 				}
 			}
-			if !slices.Equal(configuration.SelectedPath.Indexes, paths[test.order[0]].Indexes) || configuration.SelectedPath.Weight == 0 {
+			if !slices.Equal(configuration.SelectedPath.Indexes, paths[test.order[0]].Indexes) {
 				t.Fatalf("selected path = %v, want %v", configuration.SelectedPath.Indexes, paths[test.order[0]].Indexes)
 			}
 			if configuration.PreferenceFallback != test.fallback {
@@ -124,10 +125,10 @@ func TestConfigurationPreferences(t *testing.T) {
 			}
 		})
 	}
-	t.Run("all zero weights", func(t *testing.T) {
+	t.Run("all zero weights without preference", func(t *testing.T) {
 		configuration := Configuration{Paths: []Path{paths[3]}}
 		if err := configuration.SelectPath(Preferences{}); err == nil {
-			t.Fatal("selected a zero-weight path")
+			t.Fatal("selected a zero-weight path without explicit preference")
 		}
 	})
 }

@@ -209,7 +209,8 @@ func (r *recorder) configuration(configuration control.Configuration) {
 		result.Proxies = append(result.Proxies, proxySummary(proxy))
 	}
 	for _, path := range configuration.Paths {
-		result.Paths = append(result.Paths, Path{Indexes: slices.Clone(path.Indexes), Weight: path.Weight, FallbackWeight: path.FallbackWeight, Active: path.Weight > 0, Selected: slices.Equal(path.Indexes, configuration.SelectedPath.Indexes)})
+		selected := slices.Equal(path.Indexes, configuration.SelectedPath.Indexes)
+		result.Paths = append(result.Paths, Path{Indexes: slices.Clone(path.Indexes), Weight: path.Weight, FallbackWeight: path.FallbackWeight, Active: path.Weight > 0 || selected, Selected: selected})
 	}
 	r.report.Configuration = result
 	if r.actualRoute != nil {

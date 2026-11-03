@@ -345,31 +345,45 @@ func fallbackProxyUsable(proxy Proxy) bool {
 	return proxy.Server != "" && len(proxy.PublicKeys) > 0 && len(proxy.TokenKey) > 0
 }
 
-// SelectPath applies ordered preferences only to positive-weight paths published
-// by the server. Zero-weight paths remain in Paths for discovery.
-// A complete match wins, followed by ingress rank, egress rank, then weight.
-// If no complete match exists, the best partial match remains a legal path and
-// PreferenceFallback reports that some requested hop could not be matched.
+// SelectPath applies ordered preferences to two-hop paths in the configuration.
+// Positive-weight paths win by default and break ties when a preference matches
+// multiple paths; zero-weight paths are selected when explicitly matched and no
+// positive-weight path matches at the same preference rank.
 func (configuration *Configuration) SelectPath(preferences Preferences) error {
 	if len(configuration.Paths) == 0 {
 		return fmt.Errorf("relay configuration has no usable two-hop fallback path")
 	}
 	ingressPreferences := expandPreferences(preferences.Ingress)
 	egressPreferences := expandPreferences(preferences.Egress)
-	slices.SortStableFunc(configuration.Paths, func(a, b Path) int {
-		if a.Weight == 0 || b.Weight == 0 {
-			if a.Weight == b.Weight {
-				return 0
+	hasPositiveMatch := func(ai, ae int) bool {
+		return slices.ContainsFunc(configuration.Paths, func(path Path) bool {
+			if path.Weight == 0 {
+				return false
 			}
-			if a.Weight == 0 {
-				return 1
-			}
-			return -1
+			pi, pim := preferenceRank(path.Ingress, ingressPreferences)
+			pe, pem := preferenceRank(path.Egress, egressPreferences)
+			return pim && pem && pi == ai && pe == ae
+		})
+	}
+	eligible := func(path Path, ai, ae int, aim, aem bool) bool {
+		if path.Weight > 0 {
+			return true
 		}
+		return aim && aem && !hasPositiveMatch(ai, ae)
+	}
+	slices.SortStableFunc(configuration.Paths, func(a, b Path) int {
 		ai, aim := preferenceRank(a.Ingress, ingressPreferences)
 		ae, aem := preferenceRank(a.Egress, egressPreferences)
 		bi, bim := preferenceRank(b.Ingress, ingressPreferences)
 		be, bem := preferenceRank(b.Egress, egressPreferences)
+		aok := eligible(a, ai, ae, aim, aem)
+		bok := eligible(b, bi, be, bim, bem)
+		if aok != bok {
+			if aok {
+				return -1
+			}
+			return 1
+		}
 		if (aim && aem) != (bim && bem) {
 			if aim && aem {
 				return -1
@@ -382,14 +396,17 @@ func (configuration *Configuration) SelectPath(preferences Preferences) error {
 		if order := cmp.Compare(ae, be); order != 0 {
 			return order
 		}
-		return cmp.Compare(b.Weight, a.Weight)
+		if order := cmp.Compare(b.Weight, a.Weight); order != 0 {
+			return order
+		}
+		return cmp.Compare(b.FallbackWeight, a.FallbackWeight)
 	})
 	selected := configuration.Paths[0]
-	if selected.Weight == 0 {
-		return fmt.Errorf("relay configuration has no positive-weight two-hop fallback path")
-	}
 	_, ingressMatch := preferenceRank(selected.Ingress, ingressPreferences)
 	_, egressMatch := preferenceRank(selected.Egress, egressPreferences)
+	if selected.Weight == 0 && (!ingressMatch || !egressMatch || len(ingressPreferences)+len(egressPreferences) == 0) {
+		return fmt.Errorf("relay configuration has no positive-weight two-hop fallback path")
+	}
 	configuration.SelectedPath = selected
 	configuration.Ingress, configuration.Egress = selected.Ingress, selected.Egress
 	configuration.PreferenceFallback = !ingressMatch || !egressMatch
