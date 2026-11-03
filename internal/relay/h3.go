@@ -28,13 +28,15 @@ type packetDialer func(context.Context, M.Socksaddr) (net.PacketConn, net.Addr, 
 // h3Client authenticates one relay hop. Its packet path is either a local UDP
 // socket or another h3Client's CONNECT-UDP stream.
 type h3Client struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	hop      Hop
-	upstream packetDialer
-	source   Source
-	logf     LogFunc
-	observer progress.Observer
+	ctx       context.Context
+	cancel    context.CancelFunc
+	hop       Hop
+	upstream  packetDialer
+	source    Source
+	geohash   func() string
+	onGeohash func(string)
+	logf      LogFunc
+	observer  progress.Observer
 	mu       sync.Mutex
 	current  *h3Session
 	sessions map[*h3Session]struct{}
@@ -193,8 +195,13 @@ func (c *h3Client) openStream(ctx context.Context, stage, protocol string, desti
 		if !s.authenticated.Load() {
 			request.Header.Set("Proxy-Authorization", s.token.Authorization)
 		}
+		if c.geohash != nil {
+			if gh := c.geohash(); gh != "" {
+				request.Header.Set("Sec-CH-Geohash", gh)
+			}
+		}
 		c.observe(stage, progress.Running, destination.String(), nil)
-		stream, status, err := openH3Request(ctx, s.client, c.hop, protocol, request)
+		stream, status, err := openH3Request(ctx, s.client, c.hop, protocol, request, c.onGeohash)
 		if err == nil {
 			s.authenticated.Store(true)
 			c.observe(stage, progress.OK, destination.String(), nil)
@@ -333,7 +340,7 @@ func resolveQUICAddr(ctx context.Context, address string) (*net.UDPAddr, error) 
 	return &net.UDPAddr{IP: net.IP(ip.AsSlice()), Port: int(n), Zone: ip.Zone()}, nil
 }
 
-func openH3Request(ctx context.Context, client *http3.ClientConn, hop Hop, protocol string, request *http.Request) (*http3.RequestStream, int, error) {
+func openH3Request(ctx context.Context, client *http3.ClientConn, hop Hop, protocol string, request *http.Request, onGeohash func(string)) (*http3.RequestStream, int, error) {
 	select {
 	case <-client.ReceivedSettings():
 	case <-ctx.Done():
@@ -364,6 +371,11 @@ func openH3Request(ctx context.Context, client *http3.ClientConn, hop Hop, proto
 		stream.CancelRead(0)
 		stream.CancelWrite(0)
 		return nil, response.StatusCode, fmt.Errorf("%s H3 %s: HTTP %d", hop.Name, protocol, response.StatusCode)
+	}
+	if onGeohash != nil {
+		if gh := response.Header.Get("Client-Geohash"); gh != "" {
+			onGeohash(gh)
+		}
 	}
 	return stream, response.StatusCode, nil
 }

@@ -70,10 +70,10 @@ iprd auth  [--anisette-state DIR] [--anisette-server URL] [--output FILE] [--ini
 iprd csf   [--account FILE] [--output FILE]
 iprd serve [--listen ADDR] [--account FILE | --subscription FILE] [--anisette-state DIR]
            [--anisette-server URL] [--token-pool-size N] [--transport auto|h3|h2]
-           [--ingress PREF] [--egress PREF]
+           [--config-proxy URL] [--geohash auto|GEOHASH] [--ingress PREF] [--egress PREF]
 iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--timeout DURATION]
-           [--transport auto|h3|h2] [--account FILE | --subscription FILE]
-           [--ingress PREF] [--egress PREF]
+           [--transport auto|h3|h2] [--config-proxy URL] [--geohash auto|GEOHASH]
+           [--account FILE | --subscription FILE] [--ingress PREF] [--egress PREF]
 ```
 
 By default, credentials are read from `runtime/account.json`, Anisette state from `runtime/anisette`, and Anisette headers from `https://new.ani.sidestore.io`. `--token-pool-size` defaults to 60 tokens per hop (refilling at 30).
@@ -109,23 +109,22 @@ The public configuration endpoint (`https://mask-api.icloud.com/v6_2/fetchConfig
 
 Each regional configuration assigns a region-specific RSA blind-signature public key (`tokenKeyInfo`) to every hop, even when the proxy hostname and TLS raw public keys are shared globally (such as `mask.icloud.com:443` and `cp4.cloudflare.com:443`). When the egress hop redeems a `PrivacyToken`, it determines the client's country and time zone from the token's 32-byte `keyID` (`SHA-256(tokenKeyInfo)`), not from which Apple ingress POP forwarded the connection.
 
-Apple's token issuer (`/prod/v1/fetchAuthTokens`) does not check whether the client's source IP matches the region of the requested `tokenKeyInfo`. A client in Japan that loads a `FI-EET` configuration can issue valid Finnish tokens and receive Finnish exit IPs (`loc=FI`) across Cloudflare, Fastly, and Akamai—even while dialing through its local Japanese Apple ingress and local Tokyo Cloudflare POP (`colo=NRT`).
+Apple's token issuer (`/prod/v1/fetchAuthTokens`) does not check whether the client's source IP matches the region of the requested `tokenKeyInfo`. Passing `--config-proxy` (supporting `http://`, `https://`, `socks5://`, and `socks5h://`) fetches `fetchConfigFile` through an upstream proxy in another country while keeping token issuance and relay traffic direct; a client in Japan using a Finnish `--config-proxy` issues valid `FI-EET` tokens and receives Finnish exit IPs (`loc=FI`) across Cloudflare, Fastly, and Akamai—even while dialing through its local Japanese Apple ingress and local Tokyo Cloudflare POP (`colo=NRT`).
 
 ### City Selection (`Client-Geohash` and `Sec-CH-Geohash`)
 
 When the Apple ingress hop responds `200 OK` to `CONNECT` or `CONNECT-UDP`, it returns `Client-Geohash: "xxxx"`, an RFC 8941 structured string containing a 4-character base32 geohash (~39 km × 19.5 km) derived from the client's source IP.
 
-On the second hop, the client can attach `Sec-CH-Geohash: "xxxx"` to each egress `CONNECT` or `CONNECT-UDP` request to steer the exit IP to a city subnet from Apple's [egress geofeed](https://mask-api.icloud.com/egress-ip-ranges.csv). The header is evaluated per stream on an existing egress session without consuming additional tokens:
+On the second hop, `--geohash` controls the `Sec-CH-Geohash: "xxxx"` request header on each egress `CONNECT` or `CONNECT-UDP` stream to steer the exit IP to a city subnet from Apple's [egress geofeed](https://mask-api.icloud.com/egress-ip-ranges.csv) without consuming additional tokens:
 
-| Mode | Egress Header | Cloudflare | Fastly | Akamai |
+| `--geohash` | Egress Header | Cloudflare | Fastly | Akamai |
 | --- | --- | --- | --- | --- |
-| Country and time zone (`iprd` default) | *(omitted)* | Default regional `/45` | Country-only `/40` or `/48` (no city tag) | Default POP `:4000::/64` |
-| Maintain general location / override | `Sec-CH-Geohash: "xxxx"` | Matching city `/45` | Matching city `/52` | Matching city `:6xxx::/64` / `:exxx::/64` |
-| Out-of-country geohash | `Sec-CH-Geohash: "xxxx"` | Clamped to nearest domestic border city | Falls back to country-only prefix | Falls back to default `:4000::/64` |
+| *(omitted)* (default) | *(not sent)* | Default regional `/45` | Country-only `/40` or `/48` (no city tag) | Default POP `:4000::/64` |
+| `auto` or `<4-char>` (e.g. `ud9w`) | `Sec-CH-Geohash: "xxxx"` | Matching city `/45` | Matching city `/52` | Matching city `:6xxx::/64` / `:exxx::/64` |
+| Out-of-country `<4-char>` | `Sec-CH-Geohash: "xxxx"` | Clamped to nearest domestic border city | Falls back to country-only prefix | Falls back to default `:4000::/64` |
 
 ## Not Implemented Yet
 
 - OHTTP and ODoH: `*_OHTTP`, `*_OHTTP_Relay`, and `Apple_DOH` entries in the signed configuration (and the `odoh` DNS weights table) are shown by `debug --list` but not used. DNS goes through SOCKS5 remote hostname resolution or standard UDP relay (`CONNECT-UDP`).
 - Destination-based `preferredPathPatterns` and `fetchPreferredPath`: Egress vendors publish CIDR/domain matching rules and a `fetchPreferredPath` endpoint in the configuration to steer specific destinations to specific egress nodes. `iprd` uses static weight/preference selection across published paths.
-- Geohash / location flags: `iprd` currently omits `Sec-CH-Geohash` on egress requests ("Use country and time zone"); see [Location and Geohash](#location-and-geohash).
 - Hardware BAA attestation (`DeviceIdentity`): The configuration (`authType = 3`) accepts either hardware-backed BAA signatures or Anisette. For cross-platform portability, `iprd` only implements the Anisette branch.

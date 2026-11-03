@@ -33,6 +33,29 @@ func ParseTransport(value string) (Transport, error) {
 	}
 }
 
+const geohashAlphabet = "0123456789bcdefghjkmnpqrstuvwxyz"
+
+// ParseGeohash normalizes a geohash setting into "", "auto", or a quoted
+// 4-character RFC 8941 string ("xxxx").
+func ParseGeohash(value string) (string, error) {
+	trimmed := strings.ToLower(strings.Trim(strings.TrimSpace(value), `"`))
+	switch trimmed {
+	case "", "none", "off":
+		return "", nil
+	case "auto":
+		return "auto", nil
+	}
+	if len(trimmed) != 4 {
+		return "", fmt.Errorf("invalid geohash %q (want auto or a 4-character base32 geohash)", value)
+	}
+	for i := 0; i < len(trimmed); i++ {
+		if !strings.ContainsRune(geohashAlphabet, rune(trimmed[i])) {
+			return "", fmt.Errorf("invalid geohash %q (characters must be in %s)", value, geohashAlphabet)
+		}
+	}
+	return `"` + trimmed + `"`, nil
+}
+
 // Config is the boundary between token issuance and the data plane.
 type Config struct {
 	Revision string `json:"revision,omitempty"`

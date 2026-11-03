@@ -54,12 +54,30 @@ type Provider struct {
 
 // NewHTTPClient trusts the system and Apple roots and leaves redirects to callers.
 func NewHTTPClient() (*http.Client, error) {
+	return NewHTTPClientWithProxy("")
+}
+
+// NewHTTPClientWithProxy configures an Apple-aware HTTP client with an optional
+// upstream proxy URL (http, https, socks5, or socks5h).
+func NewHTTPClientWithProxy(proxyURL string) (*http.Client, error) {
 	roots, err := apple.SystemRoots()
 	if err != nil {
 		return nil, err
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{RootCAs: roots}
+	if proxyURL = strings.TrimSpace(proxyURL); proxyURL != "" {
+		parsed, err := url.Parse(proxyURL)
+		if err != nil || parsed.Host == "" {
+			return nil, fmt.Errorf("invalid proxy URL %q", proxyURL)
+		}
+		switch strings.ToLower(parsed.Scheme) {
+		case "http", "https", "socks5", "socks5h":
+		default:
+			return nil, fmt.Errorf("unsupported proxy scheme %q (want http, https, socks5, or socks5h)", parsed.Scheme)
+		}
+		transport.Proxy = http.ProxyURL(parsed)
+	}
 	return &http.Client{
 		Transport: transport,
 		Timeout:   60 * time.Second,

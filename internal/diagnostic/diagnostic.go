@@ -340,7 +340,7 @@ func Run(ctx context.Context, options Options, output, diagnostics io.Writer) (r
 	}
 	if options.ListOnly {
 		r.stage("configuration", "running", "download and verify public relay configuration")
-		client, err := auth.NewHTTPClient()
+		client, err := auth.NewHTTPClientWithProxy(options.Control.ConfigProxy)
 		if err != nil {
 			r.fail("configuration", err)
 			return err
@@ -354,6 +354,14 @@ func Run(ctx context.Context, options Options, output, diagnostics io.Writer) (r
 		r.configuration(configuration)
 		r.stage("configuration", "ok", "signature verified; public vendors and paths available")
 		return nil
+	}
+	if _, err := relay.ParseTransport(options.Control.Transport); err != nil {
+		r.fail("relay", err)
+		return err
+	}
+	if _, err := relay.ParseGeohash(options.Control.Geohash); err != nil {
+		r.fail("relay", err)
+		return err
 	}
 	if options.Control.Subscription == "" {
 		if options.Control.Account == "" {
@@ -398,6 +406,9 @@ func Run(ctx context.Context, options Options, output, diagnostics io.Writer) (r
 	dialer, err := relay.NewManaged(ctx, manager, r.logf, observer)
 	if err == nil {
 		err = dialer.SetTransport(relay.Transport(options.Control.Transport))
+	}
+	if err == nil {
+		err = dialer.SetGeohash(options.Control.Geohash)
 	}
 	if err != nil {
 		r.fail("relay", err)

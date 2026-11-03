@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"time"
 
@@ -32,6 +33,7 @@ type Dialer struct {
 	cancel    context.CancelFunc
 	source    Source
 	transport Transport
+	geohash   string
 	logf      LogFunc
 	observer  progress.Observer
 	mu        sync.Mutex
@@ -44,6 +46,7 @@ type route struct {
 	config              Config
 	ingressH2, egressH2 *h2Client
 	ingressH3, egressH3 *h3Client
+	clientGeohash       atomic.Value
 	retired             bool
 }
 
@@ -69,6 +72,17 @@ func (d *Dialer) SetTransport(transport Transport) error {
 	}
 	d.mu.Lock()
 	d.transport = parsed
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *Dialer) SetGeohash(geohash string) error {
+	parsed, err := ParseGeohash(geohash)
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.geohash = parsed
 	d.mu.Unlock()
 	return nil
 }
@@ -117,6 +131,27 @@ func (d *Dialer) routeFor(config Config) (*route, error) {
 		ingressH3 := newH3Client(d.ctx, config.Ingress, systemPacketDialer, d.source, d.logf, d.observer)
 		egressH3 := newH3Client(d.ctx, config.Egress, ingressH3.DialPacket, d.source, d.logf, d.observer)
 		next = &route{config: config, ingressH2: ingress, egressH2: egress, ingressH3: ingressH3, egressH3: egressH3}
+		storeGeohash := func(raw string) {
+			if normalized, err := ParseGeohash(raw); err == nil && normalized != "" && normalized != "auto" {
+				next.clientGeohash.Store(normalized)
+			}
+		}
+		resolveGeohash := func() string {
+			d.mu.Lock()
+			mode := d.geohash
+			d.mu.Unlock()
+			if mode == "auto" {
+				if gh, _ := next.clientGeohash.Load().(string); gh != "" {
+					return gh
+				}
+				return ""
+			}
+			return mode
+		}
+		ingress.onGeohash = storeGeohash
+		ingressH3.onGeohash = storeGeohash
+		egress.geohash = resolveGeohash
+		egressH3.geohash = resolveGeohash
 		d.routes[next] = struct{}{}
 	}
 	d.mu.Unlock()

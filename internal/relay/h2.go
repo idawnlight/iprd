@@ -22,12 +22,14 @@ import (
 // h2Client binds a fresh credential to each underlying TLS session. Network
 // establishment happens outside mu; waiting callers retain their own context.
 type h2Client struct {
-	ctx      context.Context
-	hop      Hop
-	tls      *rpkDialer
-	source   Source
-	logf     LogFunc
-	observer progress.Observer
+	ctx       context.Context
+	hop       Hop
+	tls       *rpkDialer
+	source    Source
+	geohash   func() string
+	onGeohash func(string)
+	logf      LogFunc
+	observer  progress.Observer
 	mu       sync.Mutex
 	sessions []*h2Session
 	opening  *h2Opening
@@ -203,6 +205,11 @@ func (c *h2Client) connect(ctx context.Context, s *h2Session, destination M.Sock
 	if !s.authenticated.Load() {
 		request.Header.Set("Proxy-Authorization", s.token.Authorization)
 	}
+	if c.geohash != nil {
+		if gh := c.geohash(); gh != "" {
+			request.Header.Set("Sec-CH-Geohash", gh)
+		}
+	}
 	response, err := s.cc.RoundTrip(request.WithContext(streamCtx))
 	stopped := stop()
 	if err == nil && !stopped {
@@ -220,6 +227,11 @@ func (c *h2Client) connect(ctx context.Context, s *h2Session, destination M.Sock
 		go response.Body.Close()
 		output.Close()
 		return nil, response.StatusCode, fmt.Errorf("%s H2 CONNECT: HTTP %d", c.hop.Name, response.StatusCode)
+	}
+	if c.onGeohash != nil {
+		if gh := response.Header.Get("Client-Geohash"); gh != "" {
+			c.onGeohash(gh)
+		}
 	}
 	s.authenticated.Store(true)
 	c.observe("connect", progress.OK, destination.String(), nil)

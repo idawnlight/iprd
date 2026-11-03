@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,10 +16,10 @@ import (
 )
 
 type Options struct {
-	Account, Subscription, StateDir, ServerURL, ClientInfo, Transport string
-	TokenTarget                                                       int
-	Preferences                                                       Preferences
-	Observer                                                          progress.Observer
+	Account, Subscription, StateDir, ServerURL, ClientInfo, ConfigProxy, Transport, Geohash string
+	TokenTarget                                                                             int
+	Preferences                                                                             Preferences
+	Observer                                                                                progress.Observer
 }
 
 // Snapshot contains public relay metadata and readiness, never credentials.
@@ -57,14 +58,15 @@ type managerFailure struct {
 // All relay state stays in memory. Each hop refills to 60 when 30 or fewer
 // tokens remain. TokenTarget allows a different pool size.
 type Manager struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
-	wake     chan struct{}
-	options  Options
-	logf     func(string, ...any)
-	client   *http.Client
-	provider *auth.Provider
+	ctx          context.Context
+	cancel       context.CancelFunc
+	done         chan struct{}
+	wake         chan struct{}
+	options      Options
+	logf         func(string, ...any)
+	client       *http.Client
+	configClient *http.Client
+	provider     *auth.Provider
 
 	mu                 sync.Mutex
 	changed            chan struct{}
@@ -107,10 +109,18 @@ func NewManager(ctx context.Context, options Options, logf func(string, ...any))
 	if err != nil {
 		return nil, err
 	}
+	configClient := client
+	if strings.TrimSpace(options.ConfigProxy) != "" {
+		configClient, err = auth.NewHTTPClientWithProxy(options.ConfigProxy)
+		if err != nil {
+			client.CloseIdleConnections()
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	m := &Manager{
 		ctx: ctx, cancel: cancel, done: make(chan struct{}), wake: make(chan struct{}, 1),
-		options: options, logf: logf, client: client, changed: make(chan struct{}), pools: make(map[string]*tokenPool),
+		options: options, logf: logf, client: client, configClient: configClient, changed: make(chan struct{}), pools: make(map[string]*tokenPool),
 	}
 	go m.run()
 	return m, nil
@@ -119,6 +129,9 @@ func NewManager(ctx context.Context, options Options, logf func(string, ...any))
 func (m *Manager) Close() error {
 	m.cancel()
 	<-m.done
+	if m.configClient != nil && m.configClient != m.client {
+		m.configClient.CloseIdleConnections()
+	}
 	m.client.CloseIdleConnections()
 	return nil
 }
@@ -331,7 +344,7 @@ func (m *Manager) refreshConfiguration() {
 		return
 	}
 	m.options.Observer.Emit(progress.Event{Stage: "configuration", Status: progress.Running, Detail: "download and verify the signed relay configuration"})
-	configuration, err := FetchConfiguration(m.ctx, m.client, subscriber, m.options.ClientInfo, m.options.Preferences)
+	configuration, err := FetchConfiguration(m.ctx, m.configClient, subscriber, m.options.ClientInfo, m.options.Preferences)
 	if err == nil && configuration.AuthType != 2 && configuration.AuthType != 3 {
 		err = fmt.Errorf("configuration authentication type %d does not offer Anisette", configuration.AuthType)
 	}
