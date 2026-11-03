@@ -2,7 +2,7 @@
 
 `iprd` is a standalone iCloud Private Relay client and local proxy daemon written in Go.
 
-On macOS and iOS, Private Relay is tied to system daemons and restricted to Safari and specific Apple traffic. `iprd` implements the protocol stack directly so you can use an iCloud+ subscription as a normal proxy on Linux or macOS. It listens on a single port for SOCKS5 (`CONNECT` and `UDP ASSOCIATE`), HTTP `CONNECT`, and plain HTTP requests, forwarding TCP over two-hop HTTP/2 and UDP over two-hop QUIC/HTTP/3.
+On macOS and iOS, Private Relay is tied to system daemons and restricted to Safari and specific Apple traffic. `iprd` implements the protocol stack directly in pure Go (`CGO_ENABLED=0`), turning an iCloud+ subscription into a standard local proxy on any platform Go supports. It listens on a single port for SOCKS5 (`CONNECT` and `UDP ASSOCIATE`), HTTP `CONNECT`, and plain HTTP requests, forwarding TCP over two-hop HTTP/2 and UDP over two-hop QUIC/HTTP/3.
 
 ## Usage
 
@@ -74,6 +74,12 @@ iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--timeout DURATION]
 ```
 
 By default, credentials are read from `runtime/account.json`, Anisette state from `runtime/anisette`, and Anisette headers from `https://new.ani.sidestore.io`. `--token-pool-size` defaults to 60 tokens per hop (refilling at 30).
+
+Apple's GrandSlam login (`iprd auth`) [currently rejects](https://github.com/SideStore/SideStore/issues/1709) Android-based `CoreADI` providers (`-80045`), whereas `https://new.ani.sidestore.io` succeeds. Once `runtime/account.json` is created, however, Private Relay token issuance (`iprd serve` and `iprd debug`) works with standard self-hosted Android `CoreADI` v3 servers (e.g., [`anisette-v3-server`](https://github.com/Dadoum/anisette-v3-server)). To avoid load on public Anisette instances during normal operation, run `auth` once against the default server, then point `serve` at a local v3 server with its own state directory:
+
+```sh
+./bin/iprd serve --anisette-server http://127.0.0.1:6969 --anisette-state runtime/anisette-local
+```
 
 ## Internals
 
