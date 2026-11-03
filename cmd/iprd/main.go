@@ -118,8 +118,8 @@ func usage() {
 func controlFlags(flags *flag.FlagSet, options *control.Options) {
 	flags.StringVar(&options.Account, "account", "runtime/account.json", "MobileMe credential file")
 	flags.StringVar(&options.Subscription, "subscription", "", "Use a supplied CSF response file")
-	flags.StringVar(&options.StateDir, "anisette-state", "runtime/anisette", "Anisette v3 identity and provisioning directory")
-	flags.StringVar(&options.ServerURL, "anisette-server", "https://new.ani.sidestore.io", "Anisette v3 provider")
+	flags.StringVar(&options.StateDir, "anisette-state", envOr("IPRD_ANISETTE_STATE", "runtime/anisette"), "Anisette v3 identity and provisioning directory")
+	flags.StringVar(&options.ServerURL, "anisette-server", envOr("IPRD_ANISETTE_SERVER", "https://new.ani.sidestore.io"), "Anisette v3 provider")
 	flags.IntVar(&options.TokenTarget, "token-pool-size", 60, "In-memory token pool target per hop; refill at half this count")
 	flags.StringVar(&options.Transport, "transport", "auto", "Relay transport mode: auto, h3, or h2")
 	flags.StringVar(&options.ConfigProxy, "config-proxy", "", "Upstream proxy URL (http, https, socks5, socks5h) for fetching the relay configuration")
@@ -127,6 +127,13 @@ func controlFlags(flags *flag.FlagSet, options *control.Options) {
 	flags.StringVar(&options.ClientInfo, "client-info", control.DefaultClientInfo, "X-Mask-Client-Info for configuration and token issuance")
 	preferenceFlag(flags, &options.Preferences.Ingress, "ingress")
 	preferenceFlag(flags, &options.Preferences.Egress, "egress")
+}
+
+func envOr(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func preferenceFlag(flags *flag.FlagSet, destination *[]string, name string) {

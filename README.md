@@ -78,10 +78,17 @@ iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--timeout DURATION]
 
 By default, credentials are read from `runtime/account.json`, Anisette state from `runtime/anisette`, and Anisette headers from `https://new.ani.sidestore.io`. `--token-pool-size` defaults to 60 tokens per hop (refilling at 30).
 
-Apple's GrandSlam login (`iprd auth`) [currently rejects](https://github.com/SideStore/SideStore/issues/1709) Android-based `CoreADI` providers (`-80045`), whereas `https://new.ani.sidestore.io` succeeds. Once `runtime/account.json` is created, however, Private Relay token issuance (`iprd serve` and `iprd debug`) works with standard self-hosted Android `CoreADI` v3 servers (e.g., [`anisette-v3-server`](https://github.com/Dadoum/anisette-v3-server)). To avoid load on public Anisette instances during normal operation, run `auth` once against the default server, then point `serve` at a local v3 server with its own state directory:
+Apple's GrandSlam login (`iprd auth`) [currently rejects](https://github.com/SideStore/SideStore/issues/1709) Android-based `CoreADI` providers (`-80045`), whereas `https://new.ani.sidestore.io` succeeds. Once `runtime/account.json` is created, however, Private Relay token issuance (`iprd serve` and `iprd debug`) works with standard self-hosted Android `CoreADI` v3 servers (e.g., [`anisette-v3-server`](https://github.com/Dadoum/anisette-v3-server)). To avoid load on public Anisette instances during normal operation, run `auth` once against the default server, then point `serve` at a local v3 server with its own state directory (via flags or `IPRD_ANISETTE_SERVER` / `IPRD_ANISETTE_STATE`):
 
 ```sh
 ./bin/iprd serve --anisette-server http://127.0.0.1:6969 --anisette-state runtime/anisette-local
+```
+
+The published Docker image (`ghcr.io/idawnlight/iprd`) bundles `anisette-v3-server` and sets `IPRD_ANISETTE_SERVER=http://127.0.0.1:6969` and `IPRD_ANISETTE_STATE=/app/runtime/anisette-local` automatically, so `auth` uses `https://new.ani.sidestore.io` while `serve` and `debug` issue tokens against the in-container v3 server:
+
+```sh
+docker run --rm -it -v ./runtime:/app/runtime ghcr.io/idawnlight/iprd auth
+docker run -d --name iprd -p 1080:1080 -v ./runtime:/app/runtime ghcr.io/idawnlight/iprd
 ```
 
 ## Internals
