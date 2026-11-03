@@ -59,6 +59,9 @@ func run() error {
 		if err := flags.Parse(os.Args[2:]); err != nil {
 			return err
 		}
+		if _, err := relay.ParseTransport(options.Transport); err != nil {
+			return err
+		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		manager, err := control.NewManager(ctx, options, stderrf)
@@ -71,6 +74,9 @@ func run() error {
 			return err
 		}
 		defer dialer.Close()
+		if err := dialer.SetTransport(relay.Transport(options.Transport)); err != nil {
+			return err
+		}
 		return proxy.Serve(ctx, *listen, dialer.DialContext, stderrf)
 	case "debug":
 		flags := flag.NewFlagSet("debug", flag.ContinueOnError)
@@ -99,8 +105,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "iprd — iCloud Private Relay Daemon")
 	fmt.Fprintln(os.Stderr, "  iprd auth  [--anisette-state DIR] [--output FILE] [--init-only]")
 	fmt.Fprintln(os.Stderr, "  iprd csf   [--account FILE] [--output FILE]")
-	fmt.Fprintln(os.Stderr, "  iprd serve [--account FILE] [--listen 0.0.0.0:1080] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
-	fmt.Fprintln(os.Stderr, "  iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
+	fmt.Fprintln(os.Stderr, "  iprd serve [--account FILE] [--listen 0.0.0.0:1080] [--transport auto|h3|h2] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
+	fmt.Fprintln(os.Stderr, "  iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--transport auto|h3|h2] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
 }
 
 func controlFlags(flags *flag.FlagSet, options *control.Options) {
@@ -109,6 +115,7 @@ func controlFlags(flags *flag.FlagSet, options *control.Options) {
 	flags.StringVar(&options.StateDir, "anisette-state", "runtime/anisette", "Anisette v3 identity and provisioning directory")
 	flags.StringVar(&options.ServerURL, "anisette-server", "https://new.ani.sidestore.io", "Anisette v3 provider")
 	flags.IntVar(&options.TokenTarget, "token-pool-size", 60, "In-memory token pool target per hop; refill at half this count")
+	flags.StringVar(&options.Transport, "transport", "auto", "Relay transport mode: auto, h3, or h2")
 	flags.StringVar(&options.ClientInfo, "client-info", control.DefaultClientInfo, "X-Mask-Client-Info for configuration and token issuance")
 	preferenceFlag(flags, &options.Preferences.Ingress, "ingress")
 	preferenceFlag(flags, &options.Preferences.Egress, "egress")

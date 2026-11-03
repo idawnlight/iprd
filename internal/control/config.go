@@ -73,13 +73,14 @@ type Proxy struct {
 	encodedPublicKeys []string
 }
 
-// Path is a two-hop combination published in fallbackPathWeights. Indexes
-// reference Configuration.Proxies; zero-weight entries remain discoverable.
+// Path is a two-hop combination published in pathWeights or fallbackPathWeights.
+// Indexes reference Configuration.Proxies; zero-weight entries remain discoverable.
 type Path struct {
-	Indexes []int
-	Weight  uint32
-	Ingress Proxy
-	Egress  Proxy
+	Indexes        []int
+	Weight         uint32
+	FallbackWeight uint32
+	Ingress        Proxy
+	Egress         Proxy
 }
 
 // FetchConfiguration downloads the signed remote protobuf, verifies it against
@@ -293,30 +294,49 @@ func parseConfiguration(raw []byte) (Configuration, error) {
 		proxy.Index = index
 		configuration.Proxies = append(configuration.Proxies, proxy)
 	}
-	for _, rawPath := range protoBytes(fields, 11) {
-		fields, err := readProto(rawPath)
-		if err != nil {
-			return Configuration{}, fmt.Errorf("parse relay fallback path: %w", err)
+	addPaths := func(rawPaths [][]byte, fallback bool) error {
+		for _, rawPath := range rawPaths {
+			fields, err := readProto(rawPath)
+			if err != nil {
+				return fmt.Errorf("parse relay path: %w", err)
+			}
+			indexes, err := protoRepeatedUint(fields, 2)
+			if err != nil {
+				return fmt.Errorf("parse relay path indexes: %w", err)
+			}
+			// Only use a complete, published two-hop edge. Never manufacture a
+			// combination from independently preferred ingress and egress nodes.
+			if len(indexes) != 2 || indexes[0] >= uint64(len(configuration.Proxies)) || indexes[1] >= uint64(len(configuration.Proxies)) {
+				continue
+			}
+			pair := []int{int(indexes[0]), int(indexes[1])}
+			weight := uint32(protoUint(fields, 1, 0))
+			if i := slices.IndexFunc(configuration.Paths, func(existing Path) bool { return slices.Equal(existing.Indexes, pair) }); i >= 0 {
+				if fallback {
+					configuration.Paths[i].FallbackWeight = weight
+					if configuration.Paths[i].Weight == 0 {
+						configuration.Paths[i].Weight = weight
+					}
+				}
+				continue
+			}
+			ingress, egress := configuration.Proxies[pair[0]], configuration.Proxies[pair[1]]
+			if !fallbackProxyUsable(ingress) || !fallbackProxyUsable(egress) {
+				continue
+			}
+			path := Path{Indexes: pair, Weight: weight, Ingress: ingress, Egress: egress}
+			if fallback {
+				path.FallbackWeight = weight
+			}
+			configuration.Paths = append(configuration.Paths, path)
 		}
-		indexes, err := protoRepeatedUint(fields, 2)
-		if err != nil {
-			return Configuration{}, fmt.Errorf("parse relay fallback indexes: %w", err)
-		}
-		// Only use a complete, published two-hop edge. Never manufacture a
-		// combination from independently preferred ingress and egress nodes.
-		if len(indexes) != 2 || indexes[0] >= uint64(len(configuration.Proxies)) || indexes[1] >= uint64(len(configuration.Proxies)) {
-			continue
-		}
-		ingress, egress := configuration.Proxies[indexes[0]], configuration.Proxies[indexes[1]]
-		if !fallbackProxyUsable(ingress) || !fallbackProxyUsable(egress) {
-			continue
-		}
-		configuration.Paths = append(configuration.Paths, Path{
-			Indexes: []int{int(indexes[0]), int(indexes[1])},
-			Weight:  uint32(protoUint(fields, 1, 0)),
-			Ingress: ingress,
-			Egress:  egress,
-		})
+		return nil
+	}
+	if err := addPaths(protoBytes(fields, 8), false); err != nil {
+		return Configuration{}, err
+	}
+	if err := addPaths(protoBytes(fields, 11), true); err != nil {
+		return Configuration{}, err
 	}
 	return configuration, nil
 }
@@ -420,18 +440,17 @@ func parseConfigurationProxy(raw []byte) (Proxy, error) {
 		Challenge:  protoByte(fields, 13),
 		Algorithm:  int(protoUint(fields, 16, 0)),
 	}
-	// Keep every native proxy for discovery, including preferred-path/OHTTP
-	// records without a TCP fallback endpoint. Only complete fallback nodes
-	// are admitted to Configuration.Paths.
-	if endpoint, err := url.Parse(string(protoByte(fields, 7))); err == nil && endpoint.Hostname() != "" {
+	rawEndpoint := string(protoByte(fields, 7))
+	if rawEndpoint == "" {
+		rawEndpoint = proxy.ProxyURL
+	}
+	if endpoint, err := url.Parse(rawEndpoint); err == nil && endpoint.Hostname() != "" {
 		port := endpoint.Port()
 		if port == "" {
 			port = "443"
 		}
 		proxy.ServerName = endpoint.Hostname()
 		proxy.Server = net.JoinHostPort(proxy.ServerName, port)
-	} else if endpoint, err := url.Parse(proxy.ProxyURL); err == nil {
-		proxy.ServerName = endpoint.Hostname()
 	}
 	proxy.ID = proxyIdentity(proxy)
 	proxy.encodedPublicKeys = make([]string, len(proxy.PublicKeys))

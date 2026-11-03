@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -155,28 +156,53 @@ func (c *h3Client) openSession(ctx context.Context) (_ *h3Session, err error) {
 	return s, nil
 }
 
+func (c *h3Client) DialContext(ctx context.Context, destination M.Socksaddr) (net.Conn, error) {
+	request := &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: destination.String()}, Host: destination.String(), Header: make(http.Header)}
+	stream, _, err := c.openStream(ctx, "connect", "CONNECT", destination, request)
+	if err != nil {
+		return nil, err
+	}
+	return newH3StreamConn(c.ctx, stream.stream, destination, stream.onClose), nil
+}
+
 func (c *h3Client) DialPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, net.Addr, error) {
+	header := make(http.Header)
+	header.Set("Capsule-Protocol", "?1")
+	request := &http.Request{Method: http.MethodConnect, Proto: "connect-udp", URL: connectUDPURL(c.hop.Server, destination.AddrString(), destination.Port), Host: c.hop.Server, Header: header}
+	stream, datagrams, err := c.openStream(ctx, "connect-udp", "CONNECT-UDP", destination, request)
+	if err != nil {
+		return nil, nil, err
+	}
+	return newH3PacketConn(c.ctx, stream.stream, destination, datagrams, stream.onClose), destination, nil
+}
+
+type openedH3Stream struct {
+	stream  *http3.RequestStream
+	onClose func()
+}
+
+func (c *h3Client) openStream(ctx context.Context, stage, protocol string, destination M.Socksaddr, template *http.Request) (openedH3Stream, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	for attempt := 0; attempt < 2; attempt++ {
 		s, err := c.acquire(ctx)
 		if err != nil {
-			return nil, nil, err
+			return openedH3Stream{}, false, err
 		}
-		authorization := ""
+		request := template.Clone(ctx)
 		if !s.authenticated.Load() {
-			authorization = s.token.Authorization
+			request.Header.Set("Proxy-Authorization", s.token.Authorization)
 		}
-		c.observe("connect-udp", progress.Running, destination.String(), nil)
-		packet, status, err := openH3UDP(ctx, c.ctx, s.client, c.hop, destination, authorization, s.streams.Done)
+		c.observe(stage, progress.Running, destination.String(), nil)
+		stream, status, err := openH3Request(ctx, s.client, c.hop, protocol, request)
 		if err == nil {
 			s.authenticated.Store(true)
-			c.observe("connect-udp", progress.OK, destination.String(), nil)
-			c.logf("%s: H3 CONNECT-UDP established to %s (HTTP %d)", c.hop.Name, destination, status)
-			return packet, destination, nil
+			c.observe(stage, progress.OK, destination.String(), nil)
+			c.logf("%s: H3 %s established to %s (HTTP %d)", c.hop.Name, protocol, destination, status)
+			return openedH3Stream{stream: stream, onClose: s.streams.Done}, s.client.Settings().EnableDatagrams, nil
 		}
 		s.streams.Done()
-		c.observe("connect-udp", progress.Failed, destination.String(), err)
+		c.observe(stage, progress.Failed, destination.String(), err)
 		if status == http.StatusUnauthorized || status == http.StatusProxyAuthRequired {
 			c.source.Rejected(c.hop.ID)
 			c.observe("tokens", progress.Retry, "relay rejected session token; replacing session", err)
@@ -188,13 +214,13 @@ func (c *h3Client) DialPacket(ctx context.Context, destination M.Socksaddr) (net
 		if status == 0 && ctx.Err() == nil {
 			c.invalidate(s)
 			if attempt == 0 {
-				c.observe("connect-udp", progress.Retry, "replacing session", err)
+				c.observe(stage, progress.Retry, "replacing session", err)
 				continue
 			}
 		}
-		return nil, nil, err
+		return openedH3Stream{}, false, err
 	}
-	return nil, nil, fmt.Errorf("%s: H3 authentication failed after token replacement", c.hop.Name)
+	return openedH3Stream{}, false, fmt.Errorf("%s: H3 authentication failed after token replacement", c.hop.Name)
 }
 
 func (c *h3Client) invalidate(s *h3Session) {
@@ -307,7 +333,7 @@ func resolveQUICAddr(ctx context.Context, address string) (*net.UDPAddr, error) 
 	return &net.UDPAddr{IP: net.IP(ip.AsSlice()), Port: int(n), Zone: ip.Zone()}, nil
 }
 
-func openH3UDP(ctx, lifetime context.Context, client *http3.ClientConn, hop Hop, target M.Socksaddr, authorization string, onClose func()) (*h3PacketConn, int, error) {
+func openH3Request(ctx context.Context, client *http3.ClientConn, hop Hop, protocol string, request *http.Request) (*http3.RequestStream, int, error) {
 	select {
 	case <-client.ReceivedSettings():
 	case <-ctx.Done():
@@ -321,12 +347,6 @@ func openH3UDP(ctx, lifetime context.Context, client *http3.ClientConn, hop Hop,
 		return nil, 0, err
 	}
 	stop := context.AfterFunc(ctx, func() { stream.CancelRead(0); stream.CancelWrite(0) })
-	header := make(http.Header)
-	header.Set("Capsule-Protocol", "?1")
-	if authorization != "" {
-		header.Set("Proxy-Authorization", authorization)
-	}
-	request := &http.Request{Method: http.MethodConnect, Proto: "connect-udp", URL: connectUDPURL(hop.Server, target.AddrString(), target.Port), Host: hop.Server, Header: header}
 	err = stream.SendRequestHeader(request)
 	var response *http.Response
 	if err == nil {
@@ -338,15 +358,51 @@ func openH3UDP(ctx, lifetime context.Context, client *http3.ClientConn, hop Hop,
 	if err != nil {
 		stream.CancelRead(0)
 		stream.CancelWrite(0)
-		return nil, 0, fmt.Errorf("%s H3 CONNECT-UDP: %w", hop.Name, err)
+		return nil, 0, fmt.Errorf("%s H3 %s: %w", hop.Name, protocol, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		stream.CancelRead(0)
 		stream.CancelWrite(0)
-		return nil, response.StatusCode, fmt.Errorf("%s H3 CONNECT-UDP: HTTP %d", hop.Name, response.StatusCode)
+		return nil, response.StatusCode, fmt.Errorf("%s H3 %s: HTTP %d", hop.Name, protocol, response.StatusCode)
 	}
-	return newH3PacketConn(lifetime, stream, target, client.Settings().EnableDatagrams, onClose), response.StatusCode, nil
+	return stream, response.StatusCode, nil
 }
+
+type h3StreamConn struct {
+	*http3.RequestStream
+	stop      func() bool
+	remote    net.Addr
+	closeOnce sync.Once
+	onClose   func()
+}
+
+func newH3StreamConn(ctx context.Context, stream *http3.RequestStream, remote net.Addr, onClose func()) *h3StreamConn {
+	c := &h3StreamConn{RequestStream: stream, remote: remote, onClose: onClose}
+	initialized := make(chan struct{})
+	c.stop = context.AfterFunc(ctx, func() {
+		<-initialized
+		_ = c.Close()
+	})
+	close(initialized)
+	return c
+}
+
+func (c *h3StreamConn) CloseWrite() error { return c.RequestStream.Close() }
+
+func (c *h3StreamConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.stop()
+		c.RequestStream.CancelRead(0)
+		_ = c.RequestStream.Close()
+		if c.onClose != nil {
+			c.onClose()
+		}
+	})
+	return nil
+}
+
+func (c *h3StreamConn) LocalAddr() net.Addr  { return M.Socksaddr{} }
+func (c *h3StreamConn) RemoteAddr() net.Addr { return c.remote }
 
 // h3PacketConn owns one request stream; it merges HTTP Datagrams and DATAGRAM
 // capsules and exposes complete packets directly to QUIC or the final caller.

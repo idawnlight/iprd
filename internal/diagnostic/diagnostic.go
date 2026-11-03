@@ -53,10 +53,11 @@ type Proxy struct {
 }
 
 type Path struct {
-	Indexes  []int  `json:"indexes"`
-	Weight   uint32 `json:"weight"`
-	Active   bool   `json:"active"`
-	Selected bool   `json:"selected"`
+	Indexes        []int  `json:"indexes"`
+	Weight         uint32 `json:"weight"`
+	FallbackWeight uint32 `json:"fallbackWeight,omitempty"`
+	Active         bool   `json:"active"`
+	Selected       bool   `json:"selected"`
 }
 
 type Route struct {
@@ -69,7 +70,7 @@ type Configuration struct {
 	Epoch              uint16  `json:"epoch"`
 	PreferenceFallback bool    `json:"preferenceFallback"`
 	Proxies            []Proxy `json:"proxies"`
-	Paths              []Path  `json:"fallbackPaths"`
+	Paths              []Path  `json:"paths"`
 }
 
 type Report struct {
@@ -181,7 +182,7 @@ func (r *recorder) observe(event progress.Event) {
 	if event.Stage == "route" && event.Status == progress.Retry {
 		for _, stage := range r.report.Stages {
 			previous := r.events[stage.Name]
-			if previous.Network == event.Network && (previous.Stage == "quic" || previous.Stage == "connect-udp") && (stage.Status == "running" || stage.Status == "retry") {
+			if (previous.Stage == "quic" || previous.Stage == "connect-udp" || previous.Stage == "connect") && (stage.Status == "running" || stage.Status == "retry") {
 				r.stageLocked(stage.Name, "fallback", redact(message))
 			}
 		}
@@ -208,7 +209,7 @@ func (r *recorder) configuration(configuration control.Configuration) {
 		result.Proxies = append(result.Proxies, proxySummary(proxy))
 	}
 	for _, path := range configuration.Paths {
-		result.Paths = append(result.Paths, Path{Indexes: slices.Clone(path.Indexes), Weight: path.Weight, Active: path.Weight > 0, Selected: slices.Equal(path.Indexes, configuration.SelectedPath.Indexes)})
+		result.Paths = append(result.Paths, Path{Indexes: slices.Clone(path.Indexes), Weight: path.Weight, FallbackWeight: path.FallbackWeight, Active: path.Weight > 0, Selected: slices.Equal(path.Indexes, configuration.SelectedPath.Indexes)})
 	}
 	r.report.Configuration = result
 	if r.actualRoute != nil {
@@ -350,7 +351,7 @@ func Run(ctx context.Context, options Options, output, diagnostics io.Writer) (r
 			return err
 		}
 		r.configuration(configuration)
-		r.stage("configuration", "ok", "signature verified; public vendors and fallback paths available")
+		r.stage("configuration", "ok", "signature verified; public vendors and paths available")
 		return nil
 	}
 	if options.Control.Subscription == "" {
@@ -394,6 +395,9 @@ func Run(ctx context.Context, options Options, output, diagnostics io.Writer) (r
 	}
 	r.configuration(manager.Snapshot().Configuration)
 	dialer, err := relay.NewManaged(ctx, manager, r.logf, observer)
+	if err == nil {
+		err = dialer.SetTransport(relay.Transport(options.Control.Transport))
+	}
 	if err != nil {
 		r.fail("relay", err)
 		return err
@@ -521,7 +525,7 @@ func writeReport(output io.Writer, report Report, asJSON bool) error {
 			}
 			fmt.Fprintf(&text, "  [%d] %-12s %-7s %s\n", proxy.Index, proxy.Vendor, proxy.Hop, endpoint)
 		}
-		fmt.Fprintln(&text, "fallback paths:")
+		fmt.Fprintln(&text, "paths:")
 		for _, path := range configuration.Paths {
 			selected := ""
 			if path.Selected {
@@ -529,7 +533,11 @@ func writeReport(output io.Writer, report Report, asJSON bool) error {
 			} else if !path.Active {
 				selected = " inactive"
 			}
-			fmt.Fprintf(&text, "  %v weight=%d%s\n", path.Indexes, path.Weight, selected)
+			if path.FallbackWeight != 0 {
+				fmt.Fprintf(&text, "  %v weight=%d fallback=%d%s\n", path.Indexes, path.Weight, path.FallbackWeight, selected)
+			} else {
+				fmt.Fprintf(&text, "  %v weight=%d%s\n", path.Indexes, path.Weight, selected)
+			}
 		}
 		if configuration.PreferenceFallback {
 			fmt.Fprintln(&text, "preferences: some requested preferences could not be satisfied; selected the best matching published path")

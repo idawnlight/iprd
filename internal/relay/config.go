@@ -6,8 +6,32 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
+
+	rpktls "github.com/sagernet/quic-go/rpktls"
 )
+
+type Transport string
+
+const (
+	TransportAuto Transport = "auto"
+	TransportH3   Transport = "h3"
+	TransportH2   Transport = "h2"
+)
+
+func ParseTransport(value string) (Transport, error) {
+	switch Transport(strings.ToLower(strings.TrimSpace(value))) {
+	case "", TransportAuto:
+		return TransportAuto, nil
+	case TransportH3:
+		return TransportH3, nil
+	case TransportH2:
+		return TransportH2, nil
+	default:
+		return "", fmt.Errorf("unsupported transport %q (want auto, h3, or h2)", value)
+	}
+}
 
 // Config is the boundary between token issuance and the data plane.
 type Config struct {
@@ -44,6 +68,15 @@ func (h Hop) publicKeys() ([][]byte, error) {
 		keys = append(keys, key)
 	}
 	return keys, nil
+}
+
+const algorithmX25519MLKEM768 = 3
+
+func (h Hop) curvePreferences() []rpktls.CurveID {
+	if h.Algorithm == algorithmX25519MLKEM768 {
+		return []rpktls.CurveID{rpktls.X25519MLKEM768, rpktls.X25519}
+	}
+	return []rpktls.CurveID{rpktls.X25519}
 }
 
 // Credential is consumed once when a new relay session authenticates.

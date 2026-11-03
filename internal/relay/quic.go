@@ -43,7 +43,7 @@ func dialQUIC(ctx context.Context, socket net.PacketConn, remote net.Addr, hop H
 	quicConfig := &quic.Config{
 		EnableDatagrams: true,
 		RPKConfig: &rpktls.Config{
-			CurvePreferences:   []rpktls.CurveID{rpktls.X25519},
+			CurvePreferences:   hop.curvePreferences(),
 			InsecureSkipVerify: true, // Raw SPKI is verified against the signed config below.
 			VerifyPeerCertificate: func(rawKeys [][]byte, _ [][]*x509.Certificate) error {
 				if len(rawKeys) == 0 || !slices.ContainsFunc(keys, func(key []byte) bool { return bytes.Equal(key, rawKeys[0]) }) {

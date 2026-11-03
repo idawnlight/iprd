@@ -15,10 +15,10 @@ import (
 )
 
 type Options struct {
-	Account, Subscription, StateDir, ServerURL, ClientInfo string
-	TokenTarget                                            int
-	Preferences                                            Preferences
-	Observer                                               progress.Observer
+	Account, Subscription, StateDir, ServerURL, ClientInfo, Transport string
+	TokenTarget                                                       int
+	Preferences                                                       Preferences
+	Observer                                                          progress.Observer
 }
 
 // Snapshot contains public relay metadata and readiness, never credentials.

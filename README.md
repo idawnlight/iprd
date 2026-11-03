@@ -2,7 +2,7 @@
 
 `iprd` is a standalone iCloud Private Relay client and local proxy daemon written in Go.
 
-On macOS and iOS, Private Relay is tied to system daemons and restricted to Safari and specific Apple traffic. `iprd` implements the protocol stack directly in pure Go (`CGO_ENABLED=0`), turning an iCloud+ subscription into a standard local proxy on any platform Go supports. It listens on a single port for SOCKS5 (`CONNECT` and `UDP ASSOCIATE`), HTTP `CONNECT`, and plain HTTP requests, forwarding TCP over two-hop HTTP/2 and UDP over two-hop QUIC/HTTP/3.
+On macOS and iOS, Private Relay is tied to system daemons and restricted to Safari and specific Apple traffic. `iprd` implements the protocol stack directly in pure Go (`CGO_ENABLED=0`), turning an iCloud+ subscription into a standard local proxy on any platform Go supports. It listens on a single port for SOCKS5 (`CONNECT` and `UDP ASSOCIATE`), HTTP `CONNECT`, and plain HTTP requests, forwarding traffic over two-hop QUIC/HTTP/3 (with automatic HTTP/2 TCP fallback).
 
 ## Usage
 
@@ -36,24 +36,25 @@ curl --proxy http://127.0.0.1:1080 http://example.com/
 
 ## Route Selection and Debugging
 
-List all relays and two-hop fallback paths from Apple's public configuration (no account needed):
+List all relays and two-hop paths from Apple's public configuration (no account needed):
 
 ```sh
 ./bin/iprd debug --list
 ```
 
-Prefer specific ingress or egress vendors/hostnames on `serve` or `debug`:
+Prefer specific ingress or egress vendors/hostnames, or force `h3` / `h2` transport (defaults to `auto`, which prefers H3 and falls back to H2 for TCP):
 
 ```sh
 ./bin/iprd serve --egress Fastly,CloudFlare
-./bin/iprd serve --ingress Apple --egress cp4.cloudflare.com
+./bin/iprd serve --transport h2 --ingress Apple --egress cp4.cloudflare.com
 ```
 
 Run a one-shot probe through both hops without starting the proxy listener:
 
 ```sh
-# TCP probe
+# TCP probe (defaults to H3 with H2 fallback; use --transport h2 or h3 to pin)
 ./bin/iprd debug --url https://api.ipify.org/
+./bin/iprd debug --transport h2 --url https://api.ipify.org/
 
 # UDP DNS probe over two-hop QUIC / HTTP/3
 ./bin/iprd debug --udp 1.1.1.1:53 --egress Fastly
@@ -68,9 +69,11 @@ Run a one-shot probe through both hops without starting the proxy listener:
 iprd auth  [--anisette-state DIR] [--anisette-server URL] [--output FILE] [--init-only] [--debug-dir DIR]
 iprd csf   [--account FILE] [--output FILE]
 iprd serve [--listen ADDR] [--account FILE | --subscription FILE] [--anisette-state DIR]
-           [--anisette-server URL] [--token-pool-size N] [--ingress PREF] [--egress PREF]
+           [--anisette-server URL] [--token-pool-size N] [--transport auto|h3|h2]
+           [--ingress PREF] [--egress PREF]
 iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--timeout DURATION]
-           [--account FILE | --subscription FILE] [--ingress PREF] [--egress PREF]
+           [--transport auto|h3|h2] [--account FILE | --subscription FILE]
+           [--ingress PREF] [--egress PREF]
 ```
 
 By default, credentials are read from `runtime/account.json`, Anisette state from `runtime/anisette`, and Anisette headers from `https://new.ani.sidestore.io`. `--token-pool-size` defaults to 60 tokens per hop (refilling at 30).
@@ -95,3 +98,10 @@ Private Relay servers present bare SPKIs during TLS 1.3 handshakes via RFC 7250 
 go vet ./...
 go test -race ./...
 ```
+
+## Not Implemented Yet
+
+- OHTTP and ODoH: `*_OHTTP`, `*_OHTTP_Relay`, and `Apple_DOH` entries in the signed configuration (and the `odoh` DNS weights table) are shown by `debug --list` but not used. DNS goes through SOCKS5 remote hostname resolution or standard UDP relay (`CONNECT-UDP`).
+- Destination-based `preferredPathPatterns` and `fetchPreferredPath`: Egress vendors publish CIDR/domain matching rules and a `fetchPreferredPath` endpoint in the configuration to steer specific destinations to specific egress nodes. `iprd` uses static weight/preference selection across published paths.
+- Geohash / coarse location selection: macOS lets users toggle between "Maintain general location" (geohash) and "Use country and time zone". `iprd` does not send location hints and uses the default regional egress assignment.
+- Hardware BAA attestation (`DeviceIdentity`): The configuration (`authType = 3`) accepts either hardware-backed BAA signatures or Anisette. For cross-platform portability, `iprd` only implements the Anisette branch.

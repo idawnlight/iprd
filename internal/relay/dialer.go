@@ -28,15 +28,16 @@ type LogFunc func(format string, args ...any)
 const connectTimeout = 30 * time.Second
 
 type Dialer struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	source   Source
-	logf     LogFunc
-	observer progress.Observer
-	mu       sync.Mutex
-	current  map[string]*route
-	routes   map[*route]struct{}
-	closed   bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	source    Source
+	transport Transport
+	logf      LogFunc
+	observer  progress.Observer
+	mu        sync.Mutex
+	current   map[string]*route
+	routes    map[*route]struct{}
+	closed    bool
 }
 
 type route struct {
@@ -58,7 +59,18 @@ func NewManaged(ctx context.Context, source Source, logf LogFunc, observers ...p
 	if len(observers) != 0 {
 		observer = observers[0]
 	}
-	return &Dialer{ctx: ctx, cancel: cancel, source: source, logf: logf, observer: observer, current: make(map[string]*route), routes: make(map[*route]struct{})}, nil
+	return &Dialer{ctx: ctx, cancel: cancel, source: source, transport: TransportAuto, logf: logf, observer: observer, current: make(map[string]*route), routes: make(map[*route]struct{})}, nil
+}
+
+func (d *Dialer) SetTransport(transport Transport) error {
+	parsed, err := ParseTransport(string(transport))
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.transport = parsed
+	d.mu.Unlock()
+	return nil
 }
 
 func newHop(ctx context.Context, hop Hop, upstream N.Dialer, source Source, logf LogFunc, observer progress.Observer) (*h2Client, error) {
@@ -191,8 +203,15 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 	if network != N.NetworkTCP && network != N.NetworkUDP {
 		return nil, os.ErrInvalid
 	}
+	d.mu.Lock()
+	transport := d.transport
+	d.mu.Unlock()
+	if network == N.NetworkUDP && transport == TransportH2 {
+		return nil, fmt.Errorf("UDP relay requires H3 transport")
+	}
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
+	destination := M.ParseSocksaddr(address)
 	for range 2 {
 		if network == N.NetworkUDP {
 			if source, ok := d.source.(AlternativeSource); ok {
@@ -216,12 +235,24 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 		if network == N.NetworkUDP {
 			var packet net.PacketConn
 			var remote net.Addr
-			packet, remote, err = r.egressH3.DialPacket(ctx, M.ParseSocksaddr(address))
+			packet, remote, err = r.egressH3.DialPacket(ctx, destination)
 			if err == nil {
 				conn = &udpConn{packet, remote}
 			}
 		} else {
-			conn, err = r.egressH2.DialContext(ctx, network, M.ParseSocksaddr(address))
+			switch transport {
+			case TransportH3:
+				conn, err = r.egressH3.DialContext(ctx, destination)
+			case TransportH2:
+				conn, err = r.egressH2.DialContext(ctx, network, destination)
+			default:
+				conn, err = r.egressH3.DialContext(ctx, destination)
+				if err != nil && ctx.Err() == nil && !errors.Is(err, ErrConfigurationChanged) {
+					d.observer.Emit(progress.Event{Stage: "route", Hop: config.Egress.Name, Network: network, Status: progress.Retry, Detail: "H3 unavailable; falling back to H2", Err: err})
+					d.logf("TCP over H3 via %s unavailable; falling back to H2: %v", config.Egress.Server, err)
+					conn, err = r.egressH2.DialContext(ctx, network, destination)
+				}
+			}
 		}
 		if errors.Is(err, ErrConfigurationChanged) {
 			continue
@@ -344,7 +375,7 @@ func (d *rpkDialer) DialTLSContext(ctx context.Context, destination M.Socksaddr)
 		NextProtos:         []string{"h2"},
 		MinVersion:         rpktls.VersionTLS13,
 		MaxVersion:         rpktls.VersionTLS13,
-		CurvePreferences:   []rpktls.CurveID{rpktls.X25519},
+		CurvePreferences:   d.hop.curvePreferences(),
 		RawPublicKeys:      true,
 		InsecureSkipVerify: true, // Raw SPKI is verified against the signed config below.
 		VerifyPeerCertificate: func(rawKeys [][]byte, _ [][]*x509.Certificate) error {
