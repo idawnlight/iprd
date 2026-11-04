@@ -95,39 +95,39 @@ docker run -d --name iprd -p 1080:1080 -v ./runtime:/app/runtime ghcr.io/idawnli
 
 ## Location and Geohash
 
-Exit IP location in Private Relay is controlled at two separate layers: the country is determined by the token key in the signed configuration, and the city within that country is selected per stream by the `Sec-CH-Geohash` header.
+Exit IP location in Private Relay is controlled at two separate layers: the country and time zone are determined by the token key in the signed configuration, and the city within that region is selected per stream by the `Sec-CH-Geohash` header.
 
-### Country Selection (`fetchConfigFile` and `tokenKeyInfo`)
+### Country and Time Zone Selection (`fetchConfigFile` and `tokenKeyInfo`)
 
-The public configuration endpoint (`https://mask-api.icloud.com/v6_2/fetchConfigFile`) requires no account credentials—only the `X-Mask-Client-Info` header—and returns a regional configuration based on the requester's IP (for example, `JP-JST` in Japan or `FI-EET` in Finland).
+The public configuration endpoint (`https://mask-api.icloud.com/v6_2/fetchConfigFile`) requires no account credentials—only the `X-Mask-Client-Info` header—and returns a configuration scoped to the requester's country and time zone (for example, `JP-JST`, `FI-EET`, `US-EST`, or `US-PST`).
 
 Each regional configuration assigns a region-specific RSA blind-signature public key (`tokenKeyInfo`) to every hop, even when the proxy hostname and TLS raw public keys are shared globally (such as `mask.icloud.com:443` and `cp4.cloudflare.com:443`). When the egress hop redeems a `PrivacyToken`, it determines the client's country and time zone from the token's 32-byte `keyID` (`SHA-256(tokenKeyInfo)`), not from which Apple ingress POP forwarded the connection.
 
-Apple's token issuer (`/prod/v1/fetchAuthTokens`) does not check whether the client's source IP matches the region of the requested `tokenKeyInfo`. You can either fetch `fetchConfigFile` through an upstream proxy in another country with `--config-proxy` (`http://`, `https://`, `socks5://`, or `socks5h://`) or load a saved configuration file with `--config-file` (which disables periodic configuration refresh), while keeping token issuance and relay traffic direct:
+Apple's token issuer (`/prod/v1/fetchAuthTokens`) does not check whether the client's source IP matches the region of the requested `tokenKeyInfo`. You can either fetch `fetchConfigFile` through an upstream proxy in the target region with `--config-proxy` (`http://`, `https://`, `socks5://`, or `socks5h://`) or load a saved configuration file with `--config-file` (which disables periodic configuration refresh), while keeping token issuance and relay traffic direct:
 
 ```sh
 # Fetch the regional configuration through an upstream proxy
 ./bin/iprd serve --config-proxy socks5://127.0.0.1:1081 --geohash ud9w
 
-# Or download the configuration manually on a machine in the target country and load it locally
+# Or download the configuration manually on a machine in the target region and load it locally
 curl -s -H 'X-Mask-Client-Info: <macOS;26.2;25C56> <NetworkServiceProxy/1.0 (com.apple.networkserviceproxy/990.40.2)>' \
   https://mask-api.icloud.com/v6_2/fetchConfigFile -o config.pb
 ./bin/iprd serve --config-file config.pb --geohash ud9w
 ```
 
-For example, a client in Japan using a Finnish (`FI-EET`) configuration issues valid Finnish tokens and receives Finnish exit IPs (`loc=FI`) across Cloudflare, Fastly, and Akamai—even while dialing through its local Japanese Apple ingress and local Tokyo Cloudflare POP (`colo=NRT`).
+For example, a client in Japan using a `FI-EET` or `US-EST` configuration issues valid tokens for that region and receives Finnish (`loc=FI`) or US Eastern (`loc=US`) exit IPs across Cloudflare, Fastly, and Akamai—even while dialing through its local Japanese Apple ingress and local Tokyo Cloudflare POP (`colo=NRT`).
 
 ### City Selection (`Client-Geohash` and `Sec-CH-Geohash`)
 
 When the Apple ingress hop responds `200 OK` to `CONNECT` or `CONNECT-UDP`, it returns `Client-Geohash: "xxxx"`, an RFC 8941 structured string containing a 4-character base32 geohash (~39 km × 19.5 km) derived from the client's source IP.
 
-On the second hop, `--geohash` controls the `Sec-CH-Geohash: "xxxx"` request header on each egress `CONNECT` or `CONNECT-UDP` stream to steer the exit IP to a city subnet from Apple's [egress geofeed](https://mask-api.icloud.com/egress-ip-ranges.csv) without consuming additional tokens:
+On the second hop, `--geohash` controls the `Sec-CH-Geohash: "xxxx"` request header on each egress `CONNECT` or `CONNECT-UDP` stream to steer the exit IP to a city subnet within the token's country and time zone from Apple's [egress geofeed](https://mask-api.icloud.com/egress-ip-ranges.csv) without consuming additional tokens:
 
 | `--geohash` | Egress Header | Cloudflare | Fastly | Akamai |
 | --- | --- | --- | --- | --- |
-| *(omitted)* (default) | *(not sent)* | Default regional `/45` | Country-only `/40` or `/48` (no city tag) | Default POP `:4000::/64` |
-| `auto` or `<4-char>` (e.g. `ud9w`) | `Sec-CH-Geohash: "xxxx"` | Matching city `/45` | Matching city `/52` | Matching city `:6xxx::/64` / `:exxx::/64` |
-| Out-of-country `<4-char>` | `Sec-CH-Geohash: "xxxx"` | Clamped to nearest domestic border city | Falls back to country-only prefix | Falls back to default `:4000::/64` |
+| *(omitted)* (default) | *(not sent)* | Default regional `/45` | Region/country `/40` or `/48` | Default POP `:4000::/64` |
+| `auto` or `<4-char>` (e.g. `dr4s`) | `Sec-CH-Geohash: "xxxx"` | Matching city `/45` | Matching city `/52` | Matching city `:6xxx::/64` / `:axxx::/64` / `:exxx::/64` |
+| Outside token's country / time zone | `Sec-CH-Geohash: "xxxx"` | Clamped to nearest border city in the token's region | Falls back to default region prefix | Falls back to default `:4000::/64` |
 
 ## Internals
 
