@@ -25,7 +25,10 @@ if [ "$1" = "serve" ] || [ "$1" = "debug" ]; then
 fi
 
 if [ "$start_anisette" -eq 1 ]; then
-	mkdir -p /app/runtime/anisette-v3/provisioning /app/runtime/anisette-local
+	mkdir -p /app/runtime/anisette-v3 /app/runtime/anisette-local /tmp/anisette-v3/provisioning
+	flock /app/runtime/anisette-v3/.lock \
+		/opt/anisette-v3-server --skip-server-startup -a /app/runtime/anisette-v3
+
 	/opt/anisette-v3-server \
 		-n 127.0.0.1 \
 		-p 6969 \

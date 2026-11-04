@@ -18,7 +18,7 @@ COPY --from=build /out/iprd /usr/local/bin/iprd
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /app/runtime && chown -R Alcoholic:Alcoholic /app
 USER Alcoholic
-ENV RUNTIME_DIRECTORY=/app/runtime \
+ENV RUNTIME_DIRECTORY=/tmp \
     IPRD_ANISETTE_SERVER=http://127.0.0.1:6969 \
     IPRD_ANISETTE_STATE=/app/runtime/anisette-local
 EXPOSE 1080
