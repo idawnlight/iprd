@@ -42,8 +42,7 @@ func dialQUIC(ctx context.Context, socket net.PacketConn, remote net.Addr, hop H
 	tlsConfig := &tls.Config{ServerName: serverName, NextProtos: []string{"h3"}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13}
 	_, tunneled := socket.(*h3PacketConn)
 	quicConfig := &quic.Config{
-		EnableDatagrams:         true,
-		DisablePathMTUDiscovery: tunneled,
+		EnableDatagrams: true,
 		RPKConfig: &rpktls.Config{
 			CurvePreferences:   hop.curvePreferences(),
 			InsecureSkipVerify: true, // Raw SPKI is verified against the signed config below.
