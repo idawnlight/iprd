@@ -11,10 +11,19 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/iprd ./cmd/iprd
 
+FROM --platform=$BUILDPLATFORM alpine:3.24 AS coreadi
+RUN wget -qO /tmp/applemusic.apk https://apps.mzstatic.com/content/android-apple-music-apk/applemusic.apk && \
+    mkdir -p /out/amd64 /out/arm64 && \
+    unzip -q -j /tmp/applemusic.apk "lib/x86_64/libCoreADI.so" "lib/x86_64/libstoreservicescore.so" -d /out/amd64 && \
+    unzip -q -j /tmp/applemusic.apk "lib/arm64-v8a/libCoreADI.so" "lib/arm64-v8a/libstoreservicescore.so" -d /out/arm64 && \
+    rm -f /tmp/applemusic.apk
+
 FROM dadoum/anisette-v3-server:latest
+ARG TARGETARCH
 USER root
 WORKDIR /app
 COPY --from=build /out/iprd /usr/local/bin/iprd
+COPY --from=coreadi --chown=Alcoholic:Alcoholic /out/${TARGETARCH}/ /opt/anisette-v3/lib/
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /app/runtime && chown -R Alcoholic:Alcoholic /app
 USER Alcoholic

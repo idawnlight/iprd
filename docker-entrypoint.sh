@@ -25,9 +25,15 @@ if [ "$1" = "serve" ] || [ "$1" = "debug" ]; then
 fi
 
 if [ "$start_anisette" -eq 1 ]; then
-	mkdir -p /app/runtime/anisette-v3 /app/runtime/anisette-local /tmp/anisette-v3/provisioning
-	flock /app/runtime/anisette-v3/.lock \
-		/opt/anisette-v3-server --skip-server-startup -a /app/runtime/anisette-v3
+	mkdir -p /app/runtime/anisette-v3/lib /app/runtime/anisette-local /tmp/anisette-v3/provisioning
+	flock /app/runtime/anisette-v3/.lock sh -c '
+		if [ ! -f /app/runtime/anisette-v3/lib/libCoreADI.so ] || [ ! -f /app/runtime/anisette-v3/lib/libstoreservicescore.so ]; then
+			cp -f /opt/anisette-v3/lib/libCoreADI.so /opt/anisette-v3/lib/libstoreservicescore.so /app/runtime/anisette-v3/lib/
+		fi
+		if [ ! -f /app/runtime/anisette-v3/device.json ]; then
+			/opt/anisette-v3-server --skip-server-startup -a /app/runtime/anisette-v3
+		fi
+	'
 
 	/opt/anisette-v3-server \
 		-n 127.0.0.1 \
