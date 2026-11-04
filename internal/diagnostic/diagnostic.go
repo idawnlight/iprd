@@ -339,14 +339,23 @@ func Run(ctx context.Context, options Options, output, diagnostics io.Writer) (r
 		options.Control.ClientInfo = control.DefaultClientInfo
 	}
 	if options.ListOnly {
-		r.stage("configuration", "running", "download and verify public relay configuration")
-		client, err := auth.NewHTTPClientWithProxy(options.Control.ConfigProxy)
-		if err != nil {
-			r.fail("configuration", err)
-			return err
+		var (
+			configuration control.Configuration
+			err           error
+		)
+		if options.Control.ConfigFile != "" {
+			r.stage("configuration", "running", "load and verify signed relay configuration file")
+			configuration, err = control.LoadConfiguration(options.Control.ConfigFile, options.Control.Preferences)
+		} else {
+			r.stage("configuration", "running", "download and verify public relay configuration")
+			client, clientErr := auth.NewHTTPClientWithProxy(options.Control.ConfigProxy)
+			if clientErr != nil {
+				r.fail("configuration", clientErr)
+				return clientErr
+			}
+			defer client.CloseIdleConnections()
+			configuration, err = control.FetchConfiguration(ctx, client, "", options.Control.ClientInfo, options.Control.Preferences)
 		}
-		defer client.CloseIdleConnections()
-		configuration, err := control.FetchConfiguration(ctx, client, "", options.Control.ClientInfo, options.Control.Preferences)
 		if err != nil {
 			r.fail("configuration", err)
 			return err

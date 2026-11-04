@@ -111,8 +111,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "iprd — iCloud Private Relay Daemon")
 	fmt.Fprintln(os.Stderr, "  iprd auth  [--anisette-state DIR] [--output FILE] [--init-only]")
 	fmt.Fprintln(os.Stderr, "  iprd csf   [--account FILE] [--output FILE]")
-	fmt.Fprintln(os.Stderr, "  iprd serve [--account FILE] [--listen 0.0.0.0:1080] [--transport auto|h3|h2] [--config-proxy URL] [--geohash auto|GEOHASH] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
-	fmt.Fprintln(os.Stderr, "  iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--transport auto|h3|h2] [--config-proxy URL] [--geohash auto|GEOHASH] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
+	fmt.Fprintln(os.Stderr, "  iprd serve [--account FILE] [--listen 0.0.0.0:1080] [--transport auto|h3|h2] [--config-file FILE | --config-proxy URL] [--geohash auto|GEOHASH] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
+	fmt.Fprintln(os.Stderr, "  iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--transport auto|h3|h2] [--config-file FILE | --config-proxy URL] [--geohash auto|GEOHASH] [--ingress VENDOR|HOST] [--egress VENDOR|HOST]")
 }
 
 func controlFlags(flags *flag.FlagSet, options *control.Options) {
@@ -122,6 +122,7 @@ func controlFlags(flags *flag.FlagSet, options *control.Options) {
 	flags.StringVar(&options.ServerURL, "anisette-server", envOr("IPRD_ANISETTE_SERVER", "https://new.ani.sidestore.io"), "Anisette v3 provider")
 	flags.IntVar(&options.TokenTarget, "token-pool-size", 60, "In-memory token pool target per hop; refill at half this count")
 	flags.StringVar(&options.Transport, "transport", "auto", "Relay transport mode: auto, h3, or h2")
+	flags.StringVar(&options.ConfigFile, "config-file", "", "Use a local signed relay configuration file instead of fetching from Apple")
 	flags.StringVar(&options.ConfigProxy, "config-proxy", "", "Upstream proxy URL (http, https, socks5, socks5h) for fetching the relay configuration")
 	flags.StringVar(&options.Geohash, "geohash", "", "Egress Sec-CH-Geohash: omit (default, do not send), auto (forward ingress Client-Geohash), or a 4-character geohash")
 	flags.StringVar(&options.ClientInfo, "client-info", control.DefaultClientInfo, "X-Mask-Client-Info for configuration and token issuance")

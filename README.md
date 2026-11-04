@@ -70,10 +70,12 @@ iprd auth  [--anisette-state DIR] [--anisette-server URL] [--output FILE] [--ini
 iprd csf   [--account FILE] [--output FILE]
 iprd serve [--listen ADDR] [--account FILE | --subscription FILE] [--anisette-state DIR]
            [--anisette-server URL] [--token-pool-size N] [--transport auto|h3|h2]
-           [--config-proxy URL] [--geohash auto|GEOHASH] [--ingress PREF] [--egress PREF]
+           [--config-file FILE | --config-proxy URL] [--geohash auto|GEOHASH]
+           [--ingress PREF] [--egress PREF]
 iprd debug [--list] [--json] [--url URL | --udp HOST:PORT] [--timeout DURATION]
-           [--transport auto|h3|h2] [--config-proxy URL] [--geohash auto|GEOHASH]
-           [--account FILE | --subscription FILE] [--ingress PREF] [--egress PREF]
+           [--transport auto|h3|h2] [--config-file FILE | --config-proxy URL]
+           [--geohash auto|GEOHASH] [--account FILE | --subscription FILE]
+           [--ingress PREF] [--egress PREF]
 ```
 
 By default, credentials are read from `runtime/account.json`, Anisette state from `runtime/anisette`, and Anisette headers from `https://new.ani.sidestore.io`. `--token-pool-size` defaults to 60 tokens per hop (refilling at 30).
@@ -91,21 +93,6 @@ docker run --rm -it -v ./runtime:/app/runtime ghcr.io/idawnlight/iprd auth
 docker run -d --name iprd -p 1080:1080 -v ./runtime:/app/runtime ghcr.io/idawnlight/iprd
 ```
 
-## Internals
-
-- `internal/auth` — Anisette v3 provisioning, GrandSlam SRP-6a (`s2k` / `s2k_fo`), 2FA, MobileMe login, and CSF token exchange.
-- `internal/control` — Protobuf configuration parser, Apple `networkserviceproxy` certificate chain and ECDSA signature verification, `RSABSSA-SHA384-PSS-Deterministic` token blinding, and token pool management.
-- `internal/relay` — Single-hop HTTP/2 (TCP) and QUIC/HTTP/3 (UDP) clients composed recursively (egress dials through ingress).
-- `internal/proxy` — Mixed SOCKS5 and HTTP listener.
-- `internal/diagnostic` — Stage reporter for `iprd debug`.
-
-Private Relay servers present bare SPKIs during TLS 1.3 handshakes via RFC 7250 (`server_certificate_type = 2`) instead of X.509 certificates. Since standard `crypto/tls` does not support RFC 7250, `go.mod` points to [`github.com/idawnlight/quic-go`](https://github.com/idawnlight/quic-go/tree/iprd-rpk), which adds raw public key support for both TLS 1.3 and QUIC.
-
-```sh
-go vet ./...
-go test -race ./...
-```
-
 ## Location and Geohash
 
 Exit IP location in Private Relay is controlled at two separate layers: the country is determined by the token key in the signed configuration, and the city within that country is selected per stream by the `Sec-CH-Geohash` header.
@@ -116,7 +103,19 @@ The public configuration endpoint (`https://mask-api.icloud.com/v6_2/fetchConfig
 
 Each regional configuration assigns a region-specific RSA blind-signature public key (`tokenKeyInfo`) to every hop, even when the proxy hostname and TLS raw public keys are shared globally (such as `mask.icloud.com:443` and `cp4.cloudflare.com:443`). When the egress hop redeems a `PrivacyToken`, it determines the client's country and time zone from the token's 32-byte `keyID` (`SHA-256(tokenKeyInfo)`), not from which Apple ingress POP forwarded the connection.
 
-Apple's token issuer (`/prod/v1/fetchAuthTokens`) does not check whether the client's source IP matches the region of the requested `tokenKeyInfo`. Passing `--config-proxy` (supporting `http://`, `https://`, `socks5://`, and `socks5h://`) fetches `fetchConfigFile` through an upstream proxy in another country while keeping token issuance and relay traffic direct; a client in Japan using a Finnish `--config-proxy` issues valid `FI-EET` tokens and receives Finnish exit IPs (`loc=FI`) across Cloudflare, Fastly, and Akamai—even while dialing through its local Japanese Apple ingress and local Tokyo Cloudflare POP (`colo=NRT`).
+Apple's token issuer (`/prod/v1/fetchAuthTokens`) does not check whether the client's source IP matches the region of the requested `tokenKeyInfo`. You can either fetch `fetchConfigFile` through an upstream proxy in another country with `--config-proxy` (`http://`, `https://`, `socks5://`, or `socks5h://`) or load a saved configuration file with `--config-file` (which disables periodic configuration refresh), while keeping token issuance and relay traffic direct:
+
+```sh
+# Fetch the regional configuration through an upstream proxy
+./bin/iprd serve --config-proxy socks5://127.0.0.1:1081 --geohash ud9w
+
+# Or download the configuration manually on a machine in the target country and load it locally
+curl -s -H 'X-Mask-Client-Info: <macOS;26.2;25C56> <NetworkServiceProxy/1.0 (com.apple.networkserviceproxy/990.40.2)>' \
+  https://mask-api.icloud.com/v6_2/fetchConfigFile -o config.pb
+./bin/iprd serve --config-file config.pb --geohash ud9w
+```
+
+For example, a client in Japan using a Finnish (`FI-EET`) configuration issues valid Finnish tokens and receives Finnish exit IPs (`loc=FI`) across Cloudflare, Fastly, and Akamai—even while dialing through its local Japanese Apple ingress and local Tokyo Cloudflare POP (`colo=NRT`).
 
 ### City Selection (`Client-Geohash` and `Sec-CH-Geohash`)
 
@@ -129,6 +128,21 @@ On the second hop, `--geohash` controls the `Sec-CH-Geohash: "xxxx"` request hea
 | *(omitted)* (default) | *(not sent)* | Default regional `/45` | Country-only `/40` or `/48` (no city tag) | Default POP `:4000::/64` |
 | `auto` or `<4-char>` (e.g. `ud9w`) | `Sec-CH-Geohash: "xxxx"` | Matching city `/45` | Matching city `/52` | Matching city `:6xxx::/64` / `:exxx::/64` |
 | Out-of-country `<4-char>` | `Sec-CH-Geohash: "xxxx"` | Clamped to nearest domestic border city | Falls back to country-only prefix | Falls back to default `:4000::/64` |
+
+## Internals
+
+- `internal/auth` — Anisette v3 provisioning, GrandSlam SRP-6a (`s2k` / `s2k_fo`), 2FA, MobileMe login, and CSF token exchange.
+- `internal/control` — Protobuf configuration parser, Apple `networkserviceproxy` certificate chain and ECDSA signature verification, `RSABSSA-SHA384-PSS-Deterministic` token blinding, and token pool management.
+- `internal/relay` — Single-hop QUIC/HTTP/3 (TCP and UDP) and HTTP/2 (TCP) clients composed recursively (egress dials through ingress).
+- `internal/proxy` — Mixed SOCKS5 and HTTP listener.
+- `internal/diagnostic` — Stage reporter for `iprd debug`.
+
+Private Relay servers present bare SPKIs during TLS 1.3 handshakes via RFC 7250 (`server_certificate_type = 2`) instead of X.509 certificates. Since standard `crypto/tls` does not support RFC 7250, `go.mod` points to [`github.com/idawnlight/quic-go`](https://github.com/idawnlight/quic-go/tree/iprd-rpk), which adds raw public key support for both TLS 1.3 and QUIC.
+
+```sh
+go vet ./...
+go test -race ./...
+```
 
 ## Not Implemented Yet
 

@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -131,6 +132,19 @@ func FetchConfiguration(ctx context.Context, client *http.Client, subscription, 
 
 func ParseSignedConfiguration(data []byte, preferences ...Preferences) (Configuration, error) {
 	return parseSignedConfiguration(data, preferences...)
+}
+
+func LoadConfiguration(path string, preferences ...Preferences) (Configuration, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Configuration{}, fmt.Errorf("read relay configuration: %w", err)
+	}
+	configuration, err := parseSignedConfiguration(data, preferences...)
+	if err != nil {
+		return Configuration{}, err
+	}
+	configuration.FetchedAt = time.Now().UTC()
+	return configuration, nil
 }
 
 func configurationCacheTTL(headers http.Header) time.Duration {

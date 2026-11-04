@@ -16,10 +16,10 @@ import (
 )
 
 type Options struct {
-	Account, Subscription, StateDir, ServerURL, ClientInfo, ConfigProxy, Transport, Geohash string
-	TokenTarget                                                                             int
-	Preferences                                                                             Preferences
-	Observer                                                                                progress.Observer
+	Account, Subscription, StateDir, ServerURL, ClientInfo, ConfigFile, ConfigProxy, Transport, Geohash string
+	TokenTarget                                                                                         int
+	Preferences                                                                                         Preferences
+	Observer                                                                                            progress.Observer
 }
 
 // Snapshot contains public relay metadata and readiness, never credentials.
@@ -331,6 +331,10 @@ func (m *Manager) refreshSubscription() {
 func (m *Manager) refreshConfiguration() {
 	now := time.Now()
 	m.mu.Lock()
+	if m.options.ConfigFile != "" && m.ready {
+		m.mu.Unlock()
+		return
+	}
 	due := m.terminal == nil && (!now.Before(m.configurationNext) || (m.configurationForce && !now.Before(m.configurationRetry.next)))
 	if due {
 		m.configurationForce = false
@@ -339,12 +343,22 @@ func (m *Manager) refreshConfiguration() {
 	if managerSubscriptionUsable(m.subscription, now) {
 		subscriber = m.subscription.AccessToken
 	}
+	configFile := m.options.ConfigFile
 	m.mu.Unlock()
 	if !due || m.ctx.Err() != nil {
 		return
 	}
-	m.options.Observer.Emit(progress.Event{Stage: "configuration", Status: progress.Running, Detail: "download and verify the signed relay configuration"})
-	configuration, err := FetchConfiguration(m.ctx, m.configClient, subscriber, m.options.ClientInfo, m.options.Preferences)
+	var (
+		configuration Configuration
+		err           error
+	)
+	if configFile != "" {
+		m.options.Observer.Emit(progress.Event{Stage: "configuration", Status: progress.Running, Detail: "load and verify the signed relay configuration file"})
+		configuration, err = LoadConfiguration(configFile, m.options.Preferences)
+	} else {
+		m.options.Observer.Emit(progress.Event{Stage: "configuration", Status: progress.Running, Detail: "download and verify the signed relay configuration"})
+		configuration, err = FetchConfiguration(m.ctx, m.configClient, subscriber, m.options.ClientInfo, m.options.Preferences)
+	}
 	if err == nil && configuration.AuthType != 2 && configuration.AuthType != 3 {
 		err = fmt.Errorf("configuration authentication type %d does not offer Anisette", configuration.AuthType)
 	}

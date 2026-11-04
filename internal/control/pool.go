@@ -166,11 +166,14 @@ func (m *Manager) nextDelayLocked(now time.Time) time.Duration {
 	if m.terminal != nil {
 		return max(subscriptionNext.Sub(now), 0)
 	}
-	configurationNext := m.configurationNext
-	if m.configurationForce {
-		configurationNext = minTime(configurationNext, m.configurationRetry.next)
+	next := subscriptionNext
+	if m.options.ConfigFile == "" || !m.ready {
+		configurationNext := m.configurationNext
+		if m.configurationForce {
+			configurationNext = minTime(configurationNext, m.configurationRetry.next)
+		}
+		next = minTime(next, configurationNext)
 	}
-	next := minTime(subscriptionNext, configurationNext)
 	canIssue := m.ready && managerSubscriptionUsable(m.subscription, now)
 	for _, pool := range m.pools {
 		pool.trim(now)
