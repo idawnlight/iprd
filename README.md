@@ -86,7 +86,7 @@ Apple's GrandSlam login (`iprd auth`) [currently rejects](https://github.com/Sid
 ./bin/iprd serve --anisette-server http://127.0.0.1:6969 --anisette-state runtime/anisette-local
 ```
 
-The published Docker image (`ghcr.io/idawnlight/iprd`) bundles `anisette-v3-server` and sets `IPRD_ANISETTE_SERVER=http://127.0.0.1:6969` and `IPRD_ANISETTE_STATE=/app/runtime/anisette-local` automatically, so `auth` uses `https://new.ani.sidestore.io` while `serve` and `debug` issue tokens against the in-container v3 server:
+The published Docker image (`ghcr.io/idawnlight/iprd`) bundles `anisette-v3-server` and sets `IPRD_ANISETTE_SERVER=http://127.0.0.1:6969` automatically, so `auth` uses `https://new.ani.sidestore.io` while `serve` and `debug` issue tokens against the in-container v3 server:
 
 ```sh
 docker run --rm -it -v ./runtime:/app/runtime ghcr.io/idawnlight/iprd auth

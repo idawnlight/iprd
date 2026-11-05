@@ -23,13 +23,10 @@ ARG TARGETARCH
 USER root
 WORKDIR /app
 COPY --from=build /out/iprd /usr/local/bin/iprd
-COPY --from=coreadi --chown=Alcoholic:Alcoholic /out/${TARGETARCH}/ /opt/anisette-v3/lib/
+COPY --from=coreadi /out/${TARGETARCH}/ /opt/anisette-v3/lib/
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN mkdir -p /app/runtime && chown -R Alcoholic:Alcoholic /app
-USER Alcoholic
 ENV RUNTIME_DIRECTORY=/tmp \
-    IPRD_ANISETTE_SERVER=http://127.0.0.1:6969 \
-    IPRD_ANISETTE_STATE=/app/runtime/anisette-local
+    IPRD_ANISETTE_SERVER=http://127.0.0.1:6969
 EXPOSE 1080
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["serve"]
