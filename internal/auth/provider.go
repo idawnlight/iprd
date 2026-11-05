@@ -172,28 +172,61 @@ func (p *Provider) identityHeaders() map[string]string {
 // Headers asks the v3 provider for a fresh MID/OTP pair using this identity's
 // adi.pb and combines it with the local device and client-profile fields.
 func (p *Provider) Headers(ctx context.Context) (map[string]string, error) {
+	headers, result, err := p.requestHeaders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if result != "Headers" {
+		if err := p.reprovision(ctx); err != nil {
+			return nil, fmt.Errorf("Anisette get_headers returned result %q; reprovision failed: %w", result, err)
+		}
+		headers, result, err = p.requestHeaders(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if result != "Headers" {
+			return nil, fmt.Errorf("Anisette get_headers returned result %q", result)
+		}
+	}
+	return headers, nil
+}
+
+func (p *Provider) requestHeaders(ctx context.Context) (map[string]string, string, error) {
 	body, err := json.Marshal(map[string]string{
 		"identifier": p.identity.Identifier,
 		"adi_pb":     base64.StdEncoding.EncodeToString(p.blob),
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	raw, err := p.request(ctx, "Anisette get_headers", http.MethodPost, p.server+"/v3/get_headers", map[string]string{"Content-Type": "application/json"}, body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var response map[string]string
 	if err := json.Unmarshal(raw, &response); err != nil {
-		return nil, fmt.Errorf("parse Anisette headers: %w", err)
+		return nil, "", fmt.Errorf("parse Anisette headers: %w", err)
 	}
-	if result := response["result"]; result != "Headers" {
-		return nil, fmt.Errorf("Anisette get_headers returned result %q", result)
+	result := response["result"]
+	if result != "Headers" {
+		return nil, result, nil
 	}
 	headers := p.identityHeaders()
 	delete(response, "result")
 	maps.Copy(headers, response)
-	return headers, nil
+	return headers, result, nil
+}
+
+func (p *Provider) reprovision(ctx context.Context) error {
+	raw, err := p.request(ctx, "Anisette client info", http.MethodGet, p.server+"/v3/client_info", nil, nil)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, &p.info); err != nil {
+		return fmt.Errorf("parse Anisette client info: %w", err)
+	}
+	_ = writeProviderJSON(filepath.Join(p.stateDir, "client-info.json"), p.info)
+	return p.provision(ctx)
 }
 
 func (p *Provider) request(ctx context.Context, stage, method, endpoint string, headers map[string]string, body []byte) ([]byte, error) {
